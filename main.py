@@ -26,7 +26,7 @@ if SYSTEM_OS == "Windows":
 # ==========================================
 LANG_DICT = {
     "tr": {
-        "cli_title": "NeoMC Installer - LINUX TERMINAL MODE",
+        "cli_title": "auto-mc-server - LINUX TERMINAL MODE",
         "cli_fetching": "Sunucu veritabanı ile bağlantı kuruluyor (Sürümler Çekiliyor)...",
         "sw_choice": "Yazılım Seçimi",
         "vanilla_desc": "Vanilla (Sade/Eklentisiz)",
@@ -57,8 +57,8 @@ LANG_DICT = {
         "p_err": "Hata",
         "config_files": "Ayar dosyaları (server.properties, vb.) yapılandırılıyor...",
         "install_complete": "Kurulum TAMAMLANDI!\nDizin: {0}\nÇalıştırmak için: cd Server && ./start.sh",
-        "gui_title": "NeoMC Installer Panel",
-        "title": "NEOMC INSTALLER",
+        "gui_title": "auto-mc-server Panel",
+        "title": "AUTO-MC-SERVER",
         "subtitle": "Hızlı, Güvenli ve Tam Otomatik Kurulum",
         "step1": "1. Sunucu Yazılım Türü",
         "step2": "2. Hedef Sürüm",
@@ -95,7 +95,7 @@ LANG_DICT = {
         "done_title": "Tamamlandı"
     },
     "en": {
-        "cli_title": "NeoMC Installer - LINUX TERMINAL MODE",
+        "cli_title": "auto-mc-server - LINUX TERMINAL MODE",
         "cli_fetching": "Connecting to server databases (Fetching Versions)...",
         "sw_choice": "Software Selection",
         "vanilla_desc": "Vanilla (Pure/No Plugins)",
@@ -126,8 +126,8 @@ LANG_DICT = {
         "p_err": "Error",
         "config_files": "Configuring settings files...",
         "install_complete": "Installation COMPLETE!\nDirectory: {0}\nTo run: cd Server && ./start.sh",
-        "gui_title": "NeoMC Installer Panel",
-        "title": "NEOMC INSTALLER",
+        "gui_title": "auto-mc-server Panel",
+        "title": "AUTO-MC-SERVER",
         "subtitle": "Fast, Secure, and Fully Automated Setup",
         "step1": "1. Server Software Type",
         "step2": "2. Target Version",
@@ -260,6 +260,40 @@ def fetch_api_versions():
         cache = {"Vanilla": fb, "Paper": fb, "Purpur": fb}
     return cache
 
+def check_and_install_java(is_tr, ui_logger=None):
+    try:
+        subprocess.run(["java", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    msg = "Java bulunamadı. Otomatik yükleniyor (Yönetici izni isteyebilir)..." if is_tr else "Java not found. Installing automatically (Requires Admin)..."
+    if ui_logger: ui_logger(msg)
+    else: print(f"\n[!] {msg}")
+
+    if SYSTEM_OS == "Windows":
+        try:
+            dl_url = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jre_x64_windows_hotspot_21.0.2_13.msi"
+            installer = os.path.join(os.environ.get("TEMP", os.getcwd()), "java_installer.msi")
+            urllib.request.urlretrieve(dl_url, installer)
+            
+            import ctypes
+            import time
+            # 'runas' forces the Windows Admin / UAC prompt
+            res = ctypes.windll.shell32.ShellExecuteW(None, "runas", "msiexec.exe", f'/i "{installer}" /passive', None, 1)
+            if res <= 32: return False
+            time.sleep(15) # Give it time to install
+            return True
+        except:
+            return False
+    else:
+        try:
+            if not ui_logger: print("Sudo yetkisi gerekiyor (Şifre isteyebilir)..." if is_tr else "Sudo required (May ask for password)...")
+            subprocess.run("sudo apt-get update && sudo apt-get install -y openjdk-21-jre-headless", shell=True, check=True)
+            return True
+        except:
+            return False
+
 # ==========================================
 # LINUX İÇİN TERMINAL TABANLI YAPI
 # ==========================================
@@ -309,6 +343,10 @@ def run_linux_cli():
             add_p = input(f"\n{T['ask_another']}").strip().upper()
 
     print(f"\n{T['start_install']}")
+    if not check_and_install_java(T == LANG_DICT["tr"]):
+        print(f"\n{T['p_err']}: Java kurulumu başarisiz. Lutfen manuel kurun." if T == LANG_DICT["tr"] else f"\n{T['p_err']}: Java installation failed.")
+        sys.exit()
+
     t_dir = os.path.join(os.getcwd(), "Server")
     if not os.path.exists(t_dir): os.makedirs(t_dir)
     j_name = f"{s.lower()}-{ver}.jar"
@@ -639,6 +677,11 @@ class MCServerInstallerGUI:
         jar_path = os.path.join(target_dir, jar_name)
         T = self.T
         try:
+            def update_lbl(m): self.root.after(0, lambda: self.lbl_status.configure(text=m))
+            update_lbl("Java kontrol ediliyor..." if self.lang=="tr" else "Checking Java...")
+            if not check_and_install_java(self.lang == "tr", update_lbl):
+                raise Exception("Java kurulamadı! Lütfen yönetici izni verin veya manuel kurun." if self.lang=="tr" else "Failed to install Java! Run as admin or install manually.")
+            
             if not os.path.exists(target_dir): os.makedirs(target_dir)
             download_url = None
             if software == "Paper":
@@ -688,7 +731,27 @@ class MCServerInstallerGUI:
             self.root.after(0, lambda: self.progress_var.set(0))
 
 if __name__ == "__main__":
-    if SYSTEM_OS == "Linux":
-        run_linux_cli()
-    else:
+    if SYSTEM_OS == "Windows":
+        import ctypes
+        import sys
+        
+        # Arka plandaki sinir bozucu CMD (Terminal) penceresini tamamen gizle
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 0)
+            
+        if not ctypes.windll.shell32.IsUserAnAdmin():
+            # Admin olarak yeniden başlatırken de CMD'yi gizli (0) aç
+            ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join([f'"{sys.argv[0]}"'] + sys.argv[1:]), None, 0)
+            sys.exit()
         MCServerInstallerGUI()
+    else:
+        import os
+        import sys
+        if os.geteuid() != 0:
+            print("INFO: Root privileges are requested for full automation (Java & Firewall).")
+            try:
+                os.execvp("sudo", ["sudo", sys.executable] + sys.argv)
+            except:
+                pass
+        run_linux_cli()
